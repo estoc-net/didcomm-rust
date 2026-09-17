@@ -112,7 +112,7 @@ impl Message {
         let signed = _try_unpack_sign(msg, did_resolver, options, &mut metadata).await?;
         let msg = signed.as_deref().unwrap_or(msg);
 
-        let msg = _try_unpack_plaintext(msg, did_resolver, &mut metadata)
+        let msg = _try_unpack_plaintext(msg, did_resolver, options, &mut metadata)
             .await?
             .ok_or_else(|| {
                 err_msg(
@@ -166,6 +166,17 @@ pub struct UnpackOptions {
     /// False by default.
     #[serde(default)]
     pub unwrap_re_wrapping_forward: bool,
+
+    /// Whether the `from_prior` header must be verified during unpack.
+    /// If `false`, the raw `from_prior` JWT stays in the returned message for separate verification:
+    /// its issuer DID is not resolved, and `from_prior` and `from_prior_issuer_kid` in metadata stay unset.
+    /// True by default.
+    #[serde(default = "verify_from_prior_by_default")]
+    pub verify_from_prior: bool,
+}
+
+fn verify_from_prior_by_default() -> bool {
+    true
 }
 
 impl Default for UnpackOptions {
@@ -173,6 +184,7 @@ impl Default for UnpackOptions {
         UnpackOptions {
             expect_decrypt_by_all_keys: false,
             unwrap_re_wrapping_forward: true,
+            verify_from_prior: true,
         }
     }
 }
@@ -251,8 +263,12 @@ async fn has_key_agreement_secret<'dr, 'sr>(
 
 #[cfg(test)]
 mod test {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
     use crate::{
-        did::resolvers::ExampleDIDResolver,
+        did::{resolvers::ExampleDIDResolver, DIDDoc},
         message::MessagingServiceMetadata,
         protocols::routing::wrap_in_forward,
         secrets::resolvers::ExampleSecretsResolver,
@@ -264,7 +280,8 @@ mod test {
             BOB_DID_DOC, BOB_SECRETS, BOB_SECRET_KEY_AGREEMENT_KEY_P256_1,
             BOB_SECRET_KEY_AGREEMENT_KEY_P256_2, BOB_SECRET_KEY_AGREEMENT_KEY_X25519_1,
             BOB_SECRET_KEY_AGREEMENT_KEY_X25519_2, BOB_SECRET_KEY_AGREEMENT_KEY_X25519_3,
-            BOB_SERVICE, CHARLIE_AUTH_METHOD_25519, CHARLIE_DID_DOC, ENCRYPTED_MSG_ANON_XC20P_1,
+            BOB_SERVICE, CHARLIE_AUTH_METHOD_25519, CHARLIE_DID, CHARLIE_DID_DOC,
+            CHARLIE_ROTATED_TO_ALICE_SECRETS, ENCRYPTED_MSG_ANON_XC20P_1,
             ENCRYPTED_MSG_ANON_XC20P_2, ENCRYPTED_MSG_AUTH_P256, ENCRYPTED_MSG_AUTH_P256_SIGNED,
             ENCRYPTED_MSG_AUTH_X25519, FROM_PRIOR_FULL,
             INVALID_ENCRYPTED_MSG_ANON_P256_EPK_WRONG_POINT,
@@ -2086,6 +2103,182 @@ mod test {
             "Malformed: Unable to verify from_prior signature: Unable decode signature: Invalid last symbol 66, offset 85.",
         )
             .await;
+    }
+
+    #[test]
+    fn unpack_options_verify_from_prior_by_default() {
+        assert!(UnpackOptions::default().verify_from_prior);
+
+        let options: UnpackOptions = serde_json::from_str("{}").expect("Unable parse options");
+        assert!(options.verify_from_prior);
+
+        let options: UnpackOptions =
+            serde_json::from_str(r#"{"verify_from_prior": false}"#).expect("Unable parse options");
+        assert!(!options.verify_from_prior);
+    }
+
+    #[tokio::test]
+    async fn unpack_plaintext_works_unverified_from_prior() {
+        for plaintext in [
+            PLAINTEXT_FROM_PRIOR,
+            PLAINTEXT_INVALID_FROM_PRIOR,
+            PLAINTEXT_FROM_PRIOR_INVALID_SIGNATURE,
+        ] {
+            let did_resolver =
+                RecordingDIDResolver::new(vec![ALICE_DID_DOC.clone(), BOB_DID_DOC.clone()]);
+            let secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+            let (msg, metadata) = Message::unpack(
+                plaintext,
+                &did_resolver,
+                &secrets_resolver,
+                &UnpackOptions {
+                    verify_from_prior: false,
+                    ..UnpackOptions::default()
+                },
+            )
+            .await
+            .expect("Unable unpack");
+
+            let raw: serde_json::Value =
+                serde_json::from_str(plaintext).expect("Unable parse plaintext");
+
+            assert_eq!(msg.from_prior.as_deref(), raw["from_prior"].as_str());
+            assert!(msg.from_prior.is_some());
+            assert_eq!(metadata.from_prior, None);
+            assert_eq!(metadata.from_prior_issuer_kid, None);
+            assert!(did_resolver.resolved().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn unpack_authcrypt_works_unverified_from_prior_without_issuer_did_doc() {
+        let pack_did_resolver = ExampleDIDResolver::new(vec![
+            ALICE_DID_DOC.clone(),
+            BOB_DID_DOC.clone(),
+            CHARLIE_DID_DOC.clone(),
+        ]);
+        let charlie_rotated_to_alice_secrets_resolver =
+            ExampleSecretsResolver::new(CHARLIE_ROTATED_TO_ALICE_SECRETS.clone());
+
+        let (packed_msg, _) = MESSAGE_FROM_PRIOR_FULL
+            .pack_encrypted(
+                BOB_DID,
+                Some(ALICE_DID),
+                None,
+                &pack_did_resolver,
+                &charlie_rotated_to_alice_secrets_resolver,
+                &PackEncryptedOptions {
+                    forward: false,
+                    ..PackEncryptedOptions::default()
+                },
+            )
+            .await
+            .expect("Unable pack_encrypted");
+
+        let did_resolver =
+            RecordingDIDResolver::new(vec![ALICE_DID_DOC.clone(), BOB_DID_DOC.clone()]);
+        let bob_secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+        let (msg, metadata) = Message::unpack(
+            &packed_msg,
+            &did_resolver,
+            &bob_secrets_resolver,
+            &UnpackOptions {
+                verify_from_prior: false,
+                ..UnpackOptions::default()
+            },
+        )
+        .await
+        .expect("Unable unpack");
+
+        assert_eq!(&msg, &*MESSAGE_FROM_PRIOR_FULL);
+        assert!(metadata.encrypted);
+        assert!(metadata.authenticated);
+        assert!(!metadata.anonymous_sender);
+        assert_eq!(
+            metadata
+                .encrypted_from_kid
+                .as_deref()
+                .map(|kid| did_or_url(kid).0),
+            Some(ALICE_DID)
+        );
+        assert_eq!(metadata.from_prior, None);
+        assert_eq!(metadata.from_prior_issuer_kid, None);
+        assert!(!did_resolver.resolved().iter().any(|did| did == CHARLIE_DID));
+
+        let err = Message::unpack(
+            &packed_msg,
+            &did_resolver,
+            &bob_secrets_resolver,
+            &UnpackOptions::default(),
+        )
+        .await
+        .expect_err("res is ok");
+
+        assert_eq!(err.kind(), ErrorKind::DIDNotResolved);
+    }
+
+    #[tokio::test]
+    async fn unpack_plaintext_works_non_string_from_prior() {
+        let mut plaintext: serde_json::Value =
+            serde_json::from_str(PLAINTEXT_FROM_PRIOR).expect("Unable parse plaintext");
+        plaintext["from_prior"] = serde_json::json!({ "iss": CHARLIE_DID });
+        let plaintext = plaintext.to_string();
+
+        for verify_from_prior in [true, false] {
+            let did_resolver = ExampleDIDResolver::new(vec![
+                ALICE_DID_DOC.clone(),
+                BOB_DID_DOC.clone(),
+                CHARLIE_DID_DOC.clone(),
+            ]);
+            let secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+            let err = Message::unpack(
+                &plaintext,
+                &did_resolver,
+                &secrets_resolver,
+                &UnpackOptions {
+                    verify_from_prior,
+                    ..UnpackOptions::default()
+                },
+            )
+            .await
+            .expect_err("res is ok");
+
+            assert_eq!(err.kind(), ErrorKind::Malformed);
+            assert_eq!(
+                format!("{}", err),
+                "Malformed: Message is not a valid JWE, JWS or JWM"
+            );
+        }
+    }
+
+    struct RecordingDIDResolver {
+        inner: ExampleDIDResolver,
+        resolved: Mutex<Vec<String>>,
+    }
+
+    impl RecordingDIDResolver {
+        fn new(known_dids: Vec<DIDDoc>) -> Self {
+            RecordingDIDResolver {
+                inner: ExampleDIDResolver::new(known_dids),
+                resolved: Mutex::new(vec![]),
+            }
+        }
+
+        fn resolved(&self) -> Vec<String> {
+            self.resolved.lock().unwrap().clone()
+        }
+    }
+
+    #[cfg_attr(feature = "uniffi", async_trait)]
+    #[cfg_attr(not(feature = "uniffi"), async_trait(?Send))]
+    impl DIDResolver for RecordingDIDResolver {
+        async fn resolve(&self, did: &str) -> Result<Option<DIDDoc>> {
+            self.resolved.lock().unwrap().push(did.to_owned());
+            self.inner.resolve(did).await
+        }
     }
 
     async fn _verify_unpack(msg: &str, exp_msg: &Message, exp_metadata: &UnpackMetadata) {

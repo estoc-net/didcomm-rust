@@ -310,6 +310,7 @@ dictionary UnpackMetadata {
 dictionary UnpackOptions {
   boolean expect_decrypt_by_all_keys;
   boolean unwrap_re_wrapping_forward;
+  boolean verify_from_prior = true;
 };
 
 enum SignAlg {

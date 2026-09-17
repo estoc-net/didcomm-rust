@@ -1,12 +1,17 @@
-import { Message } from "didcomm";
+import { DIDDoc, DIDResolver, Message } from "didcomm";
 import {
+  ALICE_DID,
   ALICE_DID_DOC,
+  BOB_DID,
   BOB_DID_DOC,
   BOB_SECRETS,
+  CHARLIE_DID,
   CHARLIE_DID_DOC,
+  CHARLIE_ROTATED_TO_ALICE_SECRETS,
   ExampleDIDResolver,
   ExampleSecretsResolver,
   IMESSAGE_FROM_PRIOR,
+  MESSAGE_FROM_PRIOR,
   IMESSAGE_MINIMAL,
   IMESSAGE_SIMPLE,
   PLAINTEXT_FROM_PRIOR,
@@ -111,3 +116,47 @@ test.each([
     expect(metadata).toStrictEqual(expMetadata);
   }
 );
+
+class RecordingDIDResolver implements DIDResolver {
+  resolved: string[] = [];
+  inner: ExampleDIDResolver;
+
+  constructor(knownDids: DIDDoc[]) {
+    this.inner = new ExampleDIDResolver(knownDids);
+  }
+
+  async resolve(did: string): Promise<DIDDoc | null> {
+    this.resolved.push(did);
+    return this.inner.resolve(did);
+  }
+}
+
+test("Message.unpack keeps from_prior unverified if verify_from_prior is false", async () => {
+  const [packed] = await MESSAGE_FROM_PRIOR.pack_encrypted(
+    BOB_DID,
+    ALICE_DID,
+    null,
+    new ExampleDIDResolver([ALICE_DID_DOC, BOB_DID_DOC, CHARLIE_DID_DOC]),
+    new ExampleSecretsResolver(CHARLIE_ROTATED_TO_ALICE_SECRETS),
+    { forward: false }
+  );
+
+  const didResolver = new RecordingDIDResolver([ALICE_DID_DOC, BOB_DID_DOC]);
+  const secretsResolver = new ExampleSecretsResolver(BOB_SECRETS);
+
+  const [unpacked, metadata] = await Message.unpack(
+    packed,
+    didResolver,
+    secretsResolver,
+    { verify_from_prior: false }
+  );
+
+  expect(unpacked.as_value()).toStrictEqual(IMESSAGE_FROM_PRIOR);
+  expect(metadata.authenticated).toBe(true);
+  expect(metadata.from_prior).toBeNull();
+  expect(metadata.from_prior_issuer_kid).toBeNull();
+  expect(didResolver.resolved).not.toContain(CHARLIE_DID);
+
+  const res = Message.unpack(packed, didResolver, secretsResolver, {});
+  await expect(res).rejects.toThrowError("from_prior issuer DIDDoc not found");
+});

@@ -114,6 +114,14 @@ type UnpackOptions = {
      * False by default.
      */
     unwrap_re_wrapping_forward?: boolean,
+
+    /**
+     * Whether the `from_prior` header must be verified during unpack.
+     * If `false`, the raw `from_prior` JWT stays in the returned message for separate verification:
+     * its issuer DID is not resolved, and `from_prior` and `from_prior_issuer_kid` in metadata stay unset.
+     * True by default.
+     */
+    verify_from_prior?: boolean,
 }
 "#;
 

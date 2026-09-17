@@ -1,10 +1,11 @@
 use crate::did::DIDResolver;
 use crate::error::{ErrorKind, Result};
-use crate::{FromPrior, Message, UnpackMetadata};
+use crate::{FromPrior, Message, UnpackMetadata, UnpackOptions};
 
 pub(crate) async fn _try_unpack_plaintext<'dr, 'sr>(
     msg: &str,
     did_resolver: &'dr (dyn DIDResolver + 'dr),
+    options: &UnpackOptions,
     metadata: &mut UnpackMetadata,
 ) -> Result<Option<Message>> {
     let msg = match Message::from_str(msg) {
@@ -14,7 +15,7 @@ pub(crate) async fn _try_unpack_plaintext<'dr, 'sr>(
     }
     .validate()?;
 
-    if let Some(from_prior) = &msg.from_prior {
+    if let (true, Some(from_prior)) = (options.verify_from_prior, &msg.from_prior) {
         let (unpacked_from_prior, from_prior_issuer_kid) =
             FromPrior::unpack(from_prior, did_resolver).await?;
 
