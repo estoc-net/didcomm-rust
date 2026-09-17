@@ -95,6 +95,7 @@ mod tests {
             &UnpackOptions {
                 expect_decrypt_by_all_keys: true,
                 unwrap_re_wrapping_forward: false,
+                verify_from_prior: true,
             },
             cb,
         );
@@ -142,6 +143,7 @@ mod tests {
             &UnpackOptions {
                 expect_decrypt_by_all_keys: true,
                 unwrap_re_wrapping_forward: false,
+                verify_from_prior: true,
             },
             cb,
         );
@@ -158,6 +160,7 @@ mod tests {
             &UnpackOptions {
                 expect_decrypt_by_all_keys: true,
                 unwrap_re_wrapping_forward: false,
+                verify_from_prior: true,
             },
             cb,
         );
@@ -174,6 +177,7 @@ mod tests {
             &UnpackOptions {
                 expect_decrypt_by_all_keys: true,
                 unwrap_re_wrapping_forward: false,
+                verify_from_prior: true,
             },
             cb,
         );
@@ -215,6 +219,7 @@ mod tests {
             &UnpackOptions {
                 expect_decrypt_by_all_keys: true,
                 unwrap_re_wrapping_forward: false,
+                verify_from_prior: true,
             },
             cb,
         );
@@ -245,6 +250,7 @@ mod tests {
             &UnpackOptions {
                 expect_decrypt_by_all_keys: true,
                 unwrap_re_wrapping_forward: false,
+                verify_from_prior: true,
             },
             cb,
         );

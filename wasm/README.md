@@ -1,9 +1,20 @@
 # DIDComm
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Unit Tests](https://github.com/sicpa-dlab/didcomm-rust/workflows/verify/badge.svg)](https://github.com/sicpa-dlab/didcomm-rust/actions/workflows/verify.yml)
 
 Basic [DIDComm v2](https://identity.foundation/didcomm-messaging/spec) support for modern browsers and NodeJS.
+
+## Estoc fork
+
+`@estoc/didcomm` and `@estoc/didcomm-node` are built from [estoc-net/didcomm-rust](https://github.com/estoc-net/didcomm-rust),
+a fork of [sicpa-dlab/didcomm-rust](https://github.com/sicpa-dlab/didcomm-rust) 0.4.1.
+Versions are `<upstream version>-estoc.<n>`.
+
+Changes from upstream:
+
+- `UnpackOptions.verify_from_prior` (default `true`). When `false`, `Message.unpack` keeps the raw `from_prior` JWT
+  in the returned message without resolving its issuer DID, and leaves `from_prior` and `from_prior_issuer_kid`
+  in the metadata unset. Verify it separately with `FromPrior.unpack`.
 
 ## Under the hood
 
@@ -16,9 +27,9 @@ Also [wasmp-pack](https://github.com/rustwasm/wasm-pack) helps in packaging and 
 To use `didcomm` install it with npm
 
 ```sh
-npm install didcomm --save # If you plan use webpack or other bundler
+npm install @estoc/didcomm --save # If you plan use webpack or other bundler
 
-npm install didcomm-node --save # If you plan use it without bundlers in NodeJS
+npm install @estoc/didcomm-node --save # If you plan use it without bundlers in NodeJS
 
 ```
 
