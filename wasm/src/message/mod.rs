@@ -212,9 +212,14 @@ type Base64AttachmentData = {
     base64: string,
 
     /**
+     * The hash of the content encoded in multi-hash format. Used as an integrity check for the attachment.
+     */
+    hash?: string,
+
+    /**
      * A JSON Web Signature over the content of the attachment.
      */
-    jws?: string,
+    jws?: any,
 }
 "#;
 
@@ -227,9 +232,14 @@ type JsonAttachmentData = {
     json: any,
 
     /**
+     * The hash of the content encoded in multi-hash format. Used as an integrity check for the attachment.
+     */
+    hash?: string,
+
+    /**
      * A JSON Web Signature over the content of the attachment.
      */
-    jws?: string,
+    jws?: any,
 }
 "#;
 
@@ -249,6 +259,6 @@ type LinksAttachmentData = {
     /**
      * A JSON Web Signature over the content of the attachment.
      */
-    jws?: string,
+    jws?: any,
 }
 "#;

@@ -57,18 +57,20 @@ interface AttachmentData {
 
 dictionary Base64AttachmentData {
   string base64;
-  string? jws;
+  string? hash;
+  JsonValue? jws;
 };
 
 dictionary JsonAttachmentData {
   JsonValue json;
-  string? jws;
+  string? hash;
+  JsonValue? jws;
 };
 
 dictionary LinksAttachmentData {
   sequence<string> links;
   string hash;
-  string? jws;
+  JsonValue? jws;
 };
 
 

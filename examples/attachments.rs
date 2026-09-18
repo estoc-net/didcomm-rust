@@ -31,6 +31,7 @@ async fn main() {
         data: AttachmentData::Json {
             value: JsonAttachmentData {
                 json: json!({"foo": "bar"}),
+                hash: None,
                 jws: None,
             },
         },

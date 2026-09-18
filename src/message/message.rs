@@ -6,7 +6,7 @@ use super::Attachment;
 use crate::error::{err_msg, ErrorKind, Result, ToResult};
 
 /// Wrapper for plain message. Provides helpers for message building and packing/unpacking.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct Message {
     /// Message id. Must be unique to the sender.
     pub id: String,
