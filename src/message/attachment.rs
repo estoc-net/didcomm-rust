@@ -196,13 +196,48 @@ pub enum AttachmentData {
 }
 
 const CARRIERS: [&str; 3] = ["base64", "json", "links"];
+const DATA_MEMBERS: [&str; 5] = ["base64", "json", "links", "hash", "jws"];
+
+/// Reads the data object member by member, so that a repeated known member
+/// is still an error as it is for the derived structs, instead of the last
+/// value quietly replacing the first.
+struct DataObject;
+
+impl<'de> serde::de::Visitor<'de> for DataObject {
+    type Value = serde_json::Map<String, Value>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an attachment data object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut object = serde_json::Map::new();
+
+        while let Some(key) = map.next_key::<String>()? {
+            let value: Value = map.next_value()?;
+
+            if let Some(member) = DATA_MEMBERS.iter().find(|member| **member == key) {
+                if object.contains_key(&key) {
+                    return Err(serde::de::Error::duplicate_field(member));
+                }
+            }
+
+            object.insert(key, value);
+        }
+
+        Ok(object)
+    }
+}
 
 impl<'de> Deserialize<'de> for AttachmentData {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let object = serde_json::Map::<String, Value>::deserialize(deserializer)?;
+        let object = deserializer.deserialize_map(DataObject)?;
         let present: Vec<&str> = CARRIERS
             .iter()
             .copied()
@@ -403,8 +438,22 @@ mod tests {
             json!({ "hash": "zQmYmVjaWFs" }),
         ] {
             let result = serde_json::from_value::<AttachmentData>(data.clone());
-            assert!(result.is_err(), "{data} should not deserialize");
+            assert!(result.is_err(), "{} should not deserialize", data);
         }
+
+        for raw in [
+            r#"{"base64":"YQ","base64":"Yg"}"#,
+            r#"{"json":1,"json":2}"#,
+            r#"{"base64":"YQ","hash":"zQmYQ","hash":"zQmYg"}"#,
+            r#"{"base64":"YQ","jws":"a","jws":"b"}"#,
+        ] {
+            let result = serde_json::from_str::<AttachmentData>(raw);
+            assert!(result.is_err(), "{} should not deserialize", raw);
+        }
+
+        let repeated_unknown: AttachmentData =
+            serde_json::from_str(r#"{"base64":"YQ","note":1,"note":2}"#).expect("unknown members");
+        assert!(matches!(repeated_unknown, AttachmentData::Base64 { .. }));
 
         let alone: AttachmentData =
             serde_json::from_value(json!({ "json": null })).expect("a null json payload");
