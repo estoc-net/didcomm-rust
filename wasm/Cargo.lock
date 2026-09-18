@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "didcomm-js"
-version = "0.4.1-estoc.2"
+version = "0.4.1-estoc.3"
 dependencies = [
  "async-trait",
  "console_error_panic_hook",

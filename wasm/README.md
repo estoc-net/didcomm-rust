@@ -18,6 +18,8 @@ Changes from upstream:
 - Attachment data carries the whole DIDComm v2 attachment model: `hash` is accepted on inline `base64` and `json`
   data, not only on `links`, and `jws` is the JSON value the wire carries (an object in the specification's
   examples) instead of a string. Upstream dropped an inline `hash` and rejected an object `jws` as malformed.
+- Attachment data carrying more than one of `base64`, `json` and `links` is malformed. Upstream silently kept the
+  first form it could read and dropped the other, so a receiver never learned the object was ambiguous.
 
 ## Under the hood
 

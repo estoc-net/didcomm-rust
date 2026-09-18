@@ -173,13 +173,12 @@ impl AttachmentBuilder {
     }
 }
 
-// Attention: we are using untagged enum serialization variant.
-// Serde will try to match the data against each variant in order and the
-// first one that deserializes successfully is the one returned.
-// It should work as we always have discrimination here.
-
 /// Represents attachment data in Base64, embedded Json or Links form.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+///
+/// The three forms are told apart by which carrier member is present. An
+/// object carrying two of `base64`, `json` and `links` has no single
+/// content, so it is rejected instead of silently reduced to one of them.
+#[derive(Debug, Serialize, PartialEq, Eq, Clone)]
 #[serde(untagged)]
 pub enum AttachmentData {
     Base64 {
@@ -194,6 +193,52 @@ pub enum AttachmentData {
         #[serde(flatten)]
         value: LinksAttachmentData,
     },
+}
+
+const CARRIERS: [&str; 3] = ["base64", "json", "links"];
+
+impl<'de> Deserialize<'de> for AttachmentData {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let object = serde_json::Map::<String, Value>::deserialize(deserializer)?;
+        let present: Vec<&str> = CARRIERS
+            .iter()
+            .copied()
+            .filter(|carrier| object.contains_key(*carrier))
+            .collect();
+
+        let carrier = match present.as_slice() {
+            [carrier] => *carrier,
+            [] => {
+                return Err(serde::de::Error::custom(
+                    "attachment data carries none of base64, json or links",
+                ))
+            }
+            _ => {
+                return Err(serde::de::Error::custom(format!(
+                    "attachment data carries more than one of base64, json or links: {}",
+                    present.join(", ")
+                )))
+            }
+        };
+
+        let value = Value::Object(object);
+        let data = match carrier {
+            "base64" => AttachmentData::Base64 {
+                value: serde_json::from_value(value).map_err(serde::de::Error::custom)?,
+            },
+            "json" => AttachmentData::Json {
+                value: serde_json::from_value(value).map_err(serde::de::Error::custom)?,
+            },
+            _ => AttachmentData::Links {
+                value: serde_json::from_value(value).map_err(serde::de::Error::custom)?,
+            },
+        };
+
+        Ok(data)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -346,6 +391,33 @@ mod tests {
         let wire = json!({ "data": { "json": { "note": null }, "hash": "zQmYmVjaWFs" } });
         let attachment: Attachment = serde_json::from_value(wire.clone()).expect("deserialize");
         assert_eq!(serde_json::to_value(&attachment).expect("serialize"), wire);
+    }
+
+    #[test]
+    fn attachment_data_with_two_carriers_is_rejected() {
+        for data in [
+            json!({ "base64": "aGk", "json": { "different": true } }),
+            json!({ "base64": "aGk", "json": null }),
+            json!({ "base64": "aGk", "links": ["https://example.invalid/other"], "hash": "zQmYmVjaWFs" }),
+            json!({ "json": { "note": null }, "links": ["https://example.invalid/other"], "hash": "zQmYmVjaWFs" }),
+            json!({ "hash": "zQmYmVjaWFs" }),
+        ] {
+            let result = serde_json::from_value::<AttachmentData>(data.clone());
+            assert!(result.is_err(), "{data} should not deserialize");
+        }
+
+        let alone: AttachmentData =
+            serde_json::from_value(json!({ "json": null })).expect("a null json payload");
+        assert_eq!(
+            alone,
+            AttachmentData::Json {
+                value: JsonAttachmentData {
+                    json: Value::Null,
+                    hash: None,
+                    jws: None,
+                }
+            }
+        );
     }
 
     #[test]
