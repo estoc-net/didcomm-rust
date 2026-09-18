@@ -69,3 +69,20 @@ test("Message.new keeps an inline attachment hash and an object jws", () => {
   const msg = new Message(val);
   expect(msg.as_value()).toStrictEqual(val);
 });
+
+test("Message.new rejects attachment data carrying two content forms", () => {
+  const val: IMessage = {
+    id: "example-3",
+    typ: "application/didcomm-plain+json",
+    type: "example/v1",
+    body: {},
+    attachments: [
+      {
+        id: "ambiguous",
+        data: { base64: "aGk", json: { different: true } } as any,
+      },
+    ],
+  };
+
+  expect(() => new Message(val)).toThrow(/Malformed/);
+});
