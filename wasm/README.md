@@ -15,6 +15,9 @@ Changes from upstream:
 - `UnpackOptions.verify_from_prior` (default `true`). When `false`, `Message.unpack` keeps the raw `from_prior` JWT
   in the returned message without resolving its issuer DID, and leaves `from_prior` and `from_prior_issuer_kid`
   in the metadata unset. Verify it separately with `FromPrior.unpack`.
+- Attachment data carries the whole DIDComm v2 attachment model: `hash` is accepted on inline `base64` and `json`
+  data, not only on `links`, and `jws` is the JSON value the wire carries (an object in the specification's
+  examples) instead of a string. Upstream dropped an inline `hash` and rejected an object `jws` as malformed.
 
 ## Under the hood
 

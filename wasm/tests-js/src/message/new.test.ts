@@ -39,3 +39,33 @@ test("Message.new works", () => {
   const msg = new Message(val);
   expect(msg.as_value()).toStrictEqual(val);
 });
+
+test("Message.new keeps an inline attachment hash and an object jws", () => {
+  const val: IMessage = {
+    id: "example-2",
+    typ: "application/didcomm-plain+json",
+    type: "example/v1",
+    body: {},
+    attachments: [
+      {
+        id: "attachment1",
+        data: {
+          base64: "ZXhhbXBsZQ==",
+          hash: "zQmYmVjaWFs",
+          jws: {
+            protected: "e30",
+            signature: "c2ln",
+            header: { kid: "did:example:1#key-1" },
+          },
+        },
+      },
+      {
+        id: "attachment2",
+        data: { json: { note: null }, hash: "zQmYmVjaWFs" },
+      },
+    ],
+  };
+
+  const msg = new Message(val);
+  expect(msg.as_value()).toStrictEqual(val);
+});

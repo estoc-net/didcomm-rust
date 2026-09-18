@@ -49,13 +49,21 @@ pub struct Attachment {
 impl Attachment {
     pub fn base64(base64: String) -> AttachmentBuilder {
         AttachmentBuilder::new(AttachmentData::Base64 {
-            value: Base64AttachmentData { base64, jws: None },
+            value: Base64AttachmentData {
+                base64,
+                hash: None,
+                jws: None,
+            },
         })
     }
 
     pub fn json(json: Value) -> AttachmentBuilder {
         AttachmentBuilder::new(AttachmentData::Json {
-            value: JsonAttachmentData { json, jws: None },
+            value: JsonAttachmentData {
+                json,
+                hash: None,
+                jws: None,
+            },
         })
     }
 
@@ -130,7 +138,18 @@ impl AttachmentBuilder {
         self
     }
 
-    pub fn jws(mut self, jws: String) -> Self {
+    /// Sets the multi-hash of inline content; a links attachment already carries its hash.
+    pub fn hash(mut self, hash: String) -> Self {
+        match self.data {
+            AttachmentData::Base64 { ref mut value } => value.hash = Some(hash),
+            AttachmentData::Json { ref mut value } => value.hash = Some(hash),
+            AttachmentData::Links { ref mut value } => value.hash = hash,
+        }
+
+        self
+    }
+
+    pub fn jws(mut self, jws: Value) -> Self {
         match self.data {
             AttachmentData::Base64 { ref mut value } => value.jws = Some(jws),
             AttachmentData::Json { ref mut value } => value.jws = Some(jws),
@@ -182,9 +201,13 @@ pub struct Base64AttachmentData {
     /// Base64-encoded data, when representing arbitrary content inline.
     pub base64: String,
 
+    /// The hash of the content encoded in multi-hash format. Used as an integrity check for the attachment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+
     /// A JSON Web Signature over the content of the attachment.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub jws: Option<String>,
+    pub jws: Option<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -192,9 +215,13 @@ pub struct JsonAttachmentData {
     /// Directly embedded JSON data.
     pub json: Value,
 
+    /// The hash of the content encoded in multi-hash format. Used as an integrity check for the attachment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+
     /// A JSON Web Signature over the content of the attachment.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub jws: Option<String>,
+    pub jws: Option<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -207,7 +234,7 @@ pub struct LinksAttachmentData {
 
     /// A JSON Web Signature over the content of the attachment.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub jws: Option<String>,
+    pub jws: Option<Value>,
 }
 
 #[cfg(test)]
@@ -227,7 +254,7 @@ mod tests {
             .format("json".to_owned())
             .lastmod_time(10000)
             .byte_count(200)
-            .jws("jws".to_owned())
+            .jws(json!({ "protected": "e30", "signature": "c2ln" }))
             .finalize();
 
         let data = match attachment.data {
@@ -236,7 +263,10 @@ mod tests {
         };
 
         assert_eq!(data.base64, "ZXhhbXBsZQ==");
-        assert_eq!(data.jws, Some("jws".to_owned()));
+        assert_eq!(
+            data.jws,
+            Some(json!({ "protected": "e30", "signature": "c2ln" }))
+        );
         assert_eq!(attachment.id, Some("example-1".to_owned()));
 
         assert_eq!(
@@ -261,7 +291,7 @@ mod tests {
             .format("json".to_owned())
             .lastmod_time(10000)
             .byte_count(200)
-            .jws("jws".to_owned())
+            .jws(json!({ "protected": "e30", "signature": "c2ln" }))
             .finalize();
 
         let data = match attachment.data {
@@ -270,7 +300,10 @@ mod tests {
         };
 
         assert_eq!(data.json, json!("example"));
-        assert_eq!(data.jws, Some("jws".to_owned()));
+        assert_eq!(
+            data.jws,
+            Some(json!({ "protected": "e30", "signature": "c2ln" }))
+        );
         assert_eq!(attachment.id, Some("example-1".to_owned()));
 
         assert_eq!(
@@ -286,6 +319,36 @@ mod tests {
     }
 
     #[test]
+    fn inline_hash_and_object_jws_survive_a_round_trip() {
+        let wire = json!({
+            "id": "a1",
+            "data": {
+                "base64": "aGk",
+                "hash": "zQmYmVjaWFs",
+                "jws": {
+                    "protected": "e30",
+                    "signature": "c2ln",
+                    "header": { "kid": "did:example:1#key-1" }
+                }
+            }
+        });
+
+        let attachment: Attachment = serde_json::from_value(wire.clone()).expect("deserialize");
+        let data = match attachment.data {
+            AttachmentData::Base64 { ref value } => value,
+            _ => panic!("data isn't base64."),
+        };
+
+        assert_eq!(data.hash, Some("zQmYmVjaWFs".to_owned()));
+        assert_eq!(data.jws, Some(wire["data"]["jws"].clone()));
+        assert_eq!(serde_json::to_value(&attachment).expect("serialize"), wire);
+
+        let wire = json!({ "data": { "json": { "note": null }, "hash": "zQmYmVjaWFs" } });
+        let attachment: Attachment = serde_json::from_value(wire.clone()).expect("deserialize");
+        assert_eq!(serde_json::to_value(&attachment).expect("serialize"), wire);
+    }
+
+    #[test]
     fn attachment_links_works() {
         let attachment = Attachment::links(
             vec!["http://example1".to_owned(), "https://example2".to_owned()],
@@ -298,7 +361,7 @@ mod tests {
         .format("json".to_owned())
         .lastmod_time(10000)
         .byte_count(200)
-        .jws("jws".to_owned())
+        .jws(json!({ "protected": "e30", "signature": "c2ln" }))
         .finalize();
 
         let data = match attachment.data {
@@ -316,7 +379,10 @@ mod tests {
             "50d858e0985ecc7f60418aaf0cc5ab587f42c2570a884095a9e8ccacd0f6545c".to_owned()
         );
 
-        assert_eq!(data.jws, Some("jws".to_owned()));
+        assert_eq!(
+            data.jws,
+            Some(json!({ "protected": "e30", "signature": "c2ln" }))
+        );
         assert_eq!(attachment.id, Some("example-1".to_owned()));
 
         assert_eq!(
