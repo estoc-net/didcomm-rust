@@ -170,10 +170,9 @@ impl Message {
                 let forwarded_msg = written
                     .attachments
                     .first()
-                    .map(|attachment| attachment.data.json.get().to_owned())
-                    .ok_or_else(|| {
-                        err_msg(ErrorKind::InvalidState, "Forwarded message is absent")
-                    })?;
+                    .and_then(|attachment| attachment.data.json)
+                    .map(|json| json.get().to_owned())
+                    .ok_or_else(|| err_msg(ErrorKind::Malformed, "Forwarded message is absent"))?;
 
                 return Ok(Some(forwarded_msg));
             }
@@ -198,8 +197,9 @@ struct WrittenAttachment<'a> {
 
 #[derive(Deserialize)]
 struct WrittenAttachmentData<'a> {
-    #[serde(borrow)]
-    json: &'a serde_json::value::RawValue,
+    /// Only the first attachment is unwrapped; the others may carry their content any way.
+    #[serde(borrow, default)]
+    json: Option<&'a serde_json::value::RawValue>,
 }
 
 /// Allows fine customization of unpacking process
@@ -2228,32 +2228,38 @@ mod test {
         let written = r#"{ "id": "1", "typ": "application/didcomm-plain+json",
             "type": "http://example.com/protocols/lets_do_lunch/1.0/proposal",
             "body": {"a": 1, "\u0061": 2, "n": 333333333.33333329} }"#;
-        let forward = format!(
-            r#"{{"id":"2","typ":"application/didcomm-plain+json","type":"https://didcomm.org/routing/2.0/forward","body":{{"next":"{}"}},"attachments":[{{"data":{{"json":{}}}}}]}}"#,
-            BOB_DID, written
-        );
+        for others in [
+            "",
+            r#",{"data":{"base64":"qw"}}"#,
+            r#",{"data":{"links":["https://example.com/a"],"hash":"h"}}"#,
+        ] {
+            let forward = format!(
+                r#"{{"id":"2","typ":"application/didcomm-plain+json","type":"https://didcomm.org/routing/2.0/forward","body":{{"next":"{}"}},"attachments":[{{"data":{{"json":{}}}}}{}]}}"#,
+                BOB_DID, written, others
+            );
 
-        let (packed, _) = crate::message::pack_encrypted::anoncrypt::anoncrypt(
-            BOB_DID,
-            &did_resolver,
-            forward.as_bytes(),
-            &AnonCryptAlg::default(),
-        )
-        .await
-        .expect("Unable anoncrypt");
+            let (packed, _) = crate::message::pack_encrypted::anoncrypt::anoncrypt(
+                BOB_DID,
+                &did_resolver,
+                forward.as_bytes(),
+                &AnonCryptAlg::default(),
+            )
+            .await
+            .expect("Unable anoncrypt");
 
-        let (msg, metadata, plaintext) = Message::unpack_with_plaintext(
-            &packed,
-            &did_resolver,
-            &secrets_resolver,
-            &UnpackOptions::default(),
-        )
-        .await
-        .expect("Unable unpack");
+            let (msg, metadata, plaintext) = Message::unpack_with_plaintext(
+                &packed,
+                &did_resolver,
+                &secrets_resolver,
+                &UnpackOptions::default(),
+            )
+            .await
+            .expect("Unable unpack");
 
-        assert!(metadata.re_wrapped_in_forward);
-        assert_eq!(plaintext, written);
-        assert_eq!(msg.id, "1");
+            assert!(metadata.re_wrapped_in_forward);
+            assert_eq!(plaintext, written);
+            assert_eq!(msg.id, "1");
+        }
     }
 
     #[tokio::test]
