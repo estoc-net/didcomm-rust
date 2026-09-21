@@ -56,6 +56,28 @@ impl Message {
         secrets_resolver: &'sr (dyn SecretsResolver + 'sr),
         options: &UnpackOptions,
     ) -> Result<(Self, UnpackMetadata)> {
+        let (msg, metadata, _) =
+            Self::unpack_with_plaintext(msg, did_resolver, secrets_resolver, options).await?;
+
+        Ok((msg, metadata))
+    }
+
+    /// Same as `unpack`, and also returns the plaintext the message was parsed from.
+    ///
+    /// The returned `Message` is a parsed view: duplicate JSON member names are already collapsed
+    /// and numbers already converted. A caller that must judge the JSON text itself
+    /// (for example before canonicalizing an attachment) needs the text as the sender wrote it.
+    ///
+    /// # Returns
+    /// Tuple `(message, metadata, plaintext)`.
+    /// - `plaintext` the DIDComm plaintext message as JSON string, exactly as it came out of
+    ///   decryption and signature verification. It is returned only if all of `unpack` succeeded.
+    pub async fn unpack_with_plaintext<'dr, 'sr>(
+        msg: &str,
+        did_resolver: &'dr (dyn DIDResolver + 'dr),
+        secrets_resolver: &'sr (dyn SecretsResolver + 'sr),
+        options: &UnpackOptions,
+    ) -> Result<(Self, UnpackMetadata, String)> {
         let mut metadata = UnpackMetadata {
             encrypted: false,
             authenticated: false,
@@ -112,7 +134,9 @@ impl Message {
         let signed = _try_unpack_sign(msg, did_resolver, options, &mut metadata).await?;
         let msg = signed.as_deref().unwrap_or(msg);
 
-        let msg = _try_unpack_plaintext(msg, did_resolver, options, &mut metadata)
+        let plaintext = msg;
+
+        let msg = _try_unpack_plaintext(plaintext, did_resolver, options, &mut metadata)
             .await?
             .ok_or_else(|| {
                 err_msg(
@@ -121,7 +145,7 @@ impl Message {
                 )
             })?;
 
-        Ok((msg, metadata))
+        Ok((msg, metadata, plaintext.to_owned()))
     }
 
     async fn _try_unwrap_forwarded_message<'dr, 'sr>(
@@ -2115,6 +2139,59 @@ mod test {
         let options: UnpackOptions =
             serde_json::from_str(r#"{"verify_from_prior": false}"#).expect("Unable parse options");
         assert!(!options.verify_from_prior);
+    }
+
+    #[tokio::test]
+    async fn unpack_with_plaintext_returns_text_as_written() {
+        let did_resolver =
+            ExampleDIDResolver::new(vec![ALICE_DID_DOC.clone(), BOB_DID_DOC.clone()]);
+        let secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+        // Spacing, a duplicate member name and a long decimal do not survive parsing.
+        let written = r#"{ "id": "1", "typ": "application/didcomm-plain+json",
+            "type": "http://example.com/protocols/lets_do_lunch/1.0/proposal",
+            "body": {"a": 1, "a": 2, "n": 333333333.33333329} }"#;
+
+        let (msg, _, plaintext) = Message::unpack_with_plaintext(
+            written,
+            &did_resolver,
+            &secrets_resolver,
+            &UnpackOptions::default(),
+        )
+        .await
+        .expect("Unable unpack");
+
+        assert_eq!(plaintext, written);
+        assert_eq!(msg.body["a"], 2);
+    }
+
+    #[tokio::test]
+    async fn unpack_with_plaintext_returns_innermost_text() {
+        let did_resolver =
+            ExampleDIDResolver::new(vec![ALICE_DID_DOC.clone(), BOB_DID_DOC.clone()]);
+        let secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+        for packed in [
+            SIGNED_MSG_ALICE_KEY_1,
+            ENCRYPTED_MSG_ANON_XC20P_1,
+            ENCRYPTED_MSG_AUTH_X25519,
+            ENCRYPTED_MSG_AUTH_P256_SIGNED,
+        ] {
+            let (msg, _, plaintext) = Message::unpack_with_plaintext(
+                packed,
+                &did_resolver,
+                &secrets_resolver,
+                &UnpackOptions::default(),
+            )
+            .await
+            .expect("Unable unpack");
+
+            assert_eq!(&msg, &*MESSAGE_SIMPLE);
+            assert_eq!(
+                &Message::from_str(&plaintext).expect("Unable parse plaintext"),
+                &*MESSAGE_SIMPLE
+            );
+        }
     }
 
     #[tokio::test]

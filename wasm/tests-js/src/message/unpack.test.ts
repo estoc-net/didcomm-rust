@@ -2,6 +2,7 @@ import { DIDDoc, DIDResolver, Message } from "didcomm";
 import {
   ALICE_DID,
   ALICE_DID_DOC,
+  ALICE_SECRETS,
   BOB_DID,
   BOB_DID_DOC,
   BOB_SECRETS,
@@ -116,6 +117,46 @@ test.each([
     expect(metadata).toStrictEqual(expMetadata);
   }
 );
+
+test("Message.unpack returns the plaintext as it was written", async () => {
+  // Spacing, a duplicate member name and a long decimal do not survive parsing.
+  const written = `{ "id": "1", "typ": "application/didcomm-plain+json",
+    "type": "http://example.com/protocols/lets_do_lunch/1.0/proposal",
+    "body": {"a": 1, "a": 2, "n": 333333333.33333329} }`;
+
+  const [unpacked, , plaintext] = await Message.unpack(
+    written,
+    new ExampleDIDResolver([ALICE_DID_DOC, BOB_DID_DOC]),
+    new ExampleSecretsResolver(BOB_SECRETS),
+    {}
+  );
+
+  expect(plaintext).toBe(written);
+  expect(unpacked.as_value().body.a).toBe(2);
+});
+
+test("Message.unpack returns the plaintext from inside an encrypted envelope", async () => {
+  const didResolver = new ExampleDIDResolver([ALICE_DID_DOC, BOB_DID_DOC]);
+  const message = new Message(IMESSAGE_SIMPLE);
+  const [packed] = await message.pack_encrypted(
+    BOB_DID,
+    ALICE_DID,
+    null,
+    didResolver,
+    new ExampleSecretsResolver(ALICE_SECRETS),
+    { forward: false }
+  );
+
+  const [unpacked, , plaintext] = await Message.unpack(
+    packed,
+    didResolver,
+    new ExampleSecretsResolver(BOB_SECRETS),
+    {}
+  );
+
+  expect(plaintext).toBe(await message.pack_plaintext(didResolver));
+  expect(unpacked.as_value()).toStrictEqual(IMESSAGE_SIMPLE);
+});
 
 class RecordingDIDResolver implements DIDResolver {
   resolved: string[] = [];
