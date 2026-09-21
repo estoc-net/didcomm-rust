@@ -34,19 +34,24 @@ impl Message {
                 .kind(ErrorKind::Malformed, "Options param is malformed")
                 .as_js()?;
 
-            let (msg, metadata) =
-                didcomm::Message::unpack(&msg, &did_resolver, &secrets_resolver, &options)
-                    .await
-                    .as_js()?;
+            let (msg, metadata, plaintext) = didcomm::Message::unpack_with_plaintext(
+                &msg,
+                &did_resolver,
+                &secrets_resolver,
+                &options,
+            )
+            .await
+            .as_js()?;
 
             let metadata = JsValue::from_serde(&metadata)
                 .kind(ErrorKind::InvalidState, "Unable serialize UnpackMetadata")
                 .as_js()?;
 
             let res = {
-                let res = Array::new_with_length(2);
+                let res = Array::new_with_length(3);
                 res.set(0, Message(Rc::new(msg)).into());
                 res.set(1, metadata);
+                res.set(2, plaintext.into());
                 res
             };
 
@@ -72,10 +77,13 @@ export namespace Message {
      * @param `options` allow fine configuration of unpacking process and imposing additional restrictions
      * to message to be trusted.
      *
-     * @returns Tuple `[message, metadata]`.
+     * @returns Tuple `[message, metadata, plaintext]`.
      * - `message` plain message instance
      * - `metadata` additional metadata about this `unpack` execution like used keys identifiers,
      *   trust context, algorithms and etc.
+     * - `plaintext` the DIDComm plaintext message as JSON string, exactly as it came out of
+     *   decryption and signature verification. `message` is a parsed view of it: duplicate
+     *   member names are already collapsed and numbers already converted there.
      *
      * @throws DIDCommDIDNotResolved
      * @throws DIDCommDIDUrlNotFound
@@ -91,7 +99,7 @@ export namespace Message {
         did_resolver: DIDResolver,
         secrets_resolver: SecretsResolver,
         options: UnpackOptions,
-    ): Promise<[Message, UnpackMetadata]>;
+    ): Promise<[Message, UnpackMetadata, string]>;
 }
 "#;
 

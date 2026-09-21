@@ -56,6 +56,28 @@ impl Message {
         secrets_resolver: &'sr (dyn SecretsResolver + 'sr),
         options: &UnpackOptions,
     ) -> Result<(Self, UnpackMetadata)> {
+        let (msg, metadata, _) =
+            Self::unpack_with_plaintext(msg, did_resolver, secrets_resolver, options).await?;
+
+        Ok((msg, metadata))
+    }
+
+    /// Same as `unpack`, and also returns the plaintext the message was parsed from.
+    ///
+    /// The returned `Message` is a parsed view: duplicate JSON member names are already collapsed
+    /// and numbers already converted. A caller that must judge the JSON text itself
+    /// (for example before canonicalizing an attachment) needs the text as the sender wrote it.
+    ///
+    /// # Returns
+    /// Tuple `(message, metadata, plaintext)`.
+    /// - `plaintext` the DIDComm plaintext message as JSON string, exactly as it came out of
+    ///   decryption and signature verification. It is returned only if all of `unpack` succeeded.
+    pub async fn unpack_with_plaintext<'dr, 'sr>(
+        msg: &str,
+        did_resolver: &'dr (dyn DIDResolver + 'dr),
+        secrets_resolver: &'sr (dyn SecretsResolver + 'sr),
+        options: &UnpackOptions,
+    ) -> Result<(Self, UnpackMetadata, String)> {
         let mut metadata = UnpackMetadata {
             encrypted: false,
             authenticated: false,
@@ -112,7 +134,9 @@ impl Message {
         let signed = _try_unpack_sign(msg, did_resolver, options, &mut metadata).await?;
         let msg = signed.as_deref().unwrap_or(msg);
 
-        let msg = _try_unpack_plaintext(msg, did_resolver, options, &mut metadata)
+        let plaintext = msg;
+
+        let msg = _try_unpack_plaintext(plaintext, did_resolver, options, &mut metadata)
             .await?
             .ok_or_else(|| {
                 err_msg(
@@ -121,7 +145,7 @@ impl Message {
                 )
             })?;
 
-        Ok((msg, metadata))
+        Ok((msg, metadata, plaintext.to_owned()))
     }
 
     async fn _try_unwrap_forwarded_message<'dr, 'sr>(
@@ -137,13 +161,18 @@ impl Message {
 
         if let Some(forward_msg) = try_parse_forward(&plaintext) {
             if has_key_agreement_secret(&forward_msg.next, did_resolver, secrets_resolver).await? {
-                // TODO: Think how to avoid extra serialization of forwarded_msg here.
-                // (This serializtion is a double work because forwarded_msg will then
-                // be deserialized in _try_unpack_anoncrypt.)
-                let forwarded_msg = serde_json::to_string(&forward_msg.forwarded_msg).kind(
-                    ErrorKind::InvalidState,
-                    "Unable serialize forwarded message",
-                )?;
+                // The attachment is handed on as the text it was written as: serializing the
+                // parsed value again would collapse duplicate member names and move numbers
+                // before the caller of `unpack_with_plaintext` ever sees them.
+                let written: WrittenForward = serde_json::from_str(msg)
+                    .kind(ErrorKind::Malformed, "Unable read forwarded message")?;
+
+                let forwarded_msg = written
+                    .attachments
+                    .first()
+                    .and_then(|attachment| attachment.data.json)
+                    .map(|json| json.get().to_owned())
+                    .ok_or_else(|| err_msg(ErrorKind::Malformed, "Forwarded message is absent"))?;
 
                 return Ok(Some(forwarded_msg));
             }
@@ -151,6 +180,26 @@ impl Message {
 
         Ok(None)
     }
+}
+
+/// The one member of a forward that must survive as written, borrowed from its text.
+#[derive(Deserialize)]
+struct WrittenForward<'a> {
+    #[serde(borrow)]
+    attachments: Vec<WrittenAttachment<'a>>,
+}
+
+#[derive(Deserialize)]
+struct WrittenAttachment<'a> {
+    #[serde(borrow)]
+    data: WrittenAttachmentData<'a>,
+}
+
+#[derive(Deserialize)]
+struct WrittenAttachmentData<'a> {
+    /// Only the first attachment is unwrapped; the others may carry their content any way.
+    #[serde(borrow, default)]
+    json: Option<&'a serde_json::value::RawValue>,
 }
 
 /// Allows fine customization of unpacking process
@@ -2115,6 +2164,131 @@ mod test {
         let options: UnpackOptions =
             serde_json::from_str(r#"{"verify_from_prior": false}"#).expect("Unable parse options");
         assert!(!options.verify_from_prior);
+    }
+
+    #[tokio::test]
+    async fn unpack_with_plaintext_returns_text_as_written() {
+        let did_resolver =
+            ExampleDIDResolver::new(vec![ALICE_DID_DOC.clone(), BOB_DID_DOC.clone()]);
+        let secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+        // Spacing, a duplicate member name and a long decimal do not survive parsing.
+        let written = r#"{ "id": "1", "typ": "application/didcomm-plain+json",
+            "type": "http://example.com/protocols/lets_do_lunch/1.0/proposal",
+            "body": {"a": 1, "a": 2, "n": 333333333.33333329} }"#;
+
+        let (msg, _, plaintext) = Message::unpack_with_plaintext(
+            written,
+            &did_resolver,
+            &secrets_resolver,
+            &UnpackOptions::default(),
+        )
+        .await
+        .expect("Unable unpack");
+
+        assert_eq!(plaintext, written);
+        assert_eq!(msg.body["a"], 2);
+    }
+
+    #[tokio::test]
+    async fn unpack_with_plaintext_returns_innermost_text() {
+        let did_resolver =
+            ExampleDIDResolver::new(vec![ALICE_DID_DOC.clone(), BOB_DID_DOC.clone()]);
+        let secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+        for packed in [
+            SIGNED_MSG_ALICE_KEY_1,
+            ENCRYPTED_MSG_ANON_XC20P_1,
+            ENCRYPTED_MSG_AUTH_X25519,
+            ENCRYPTED_MSG_AUTH_P256_SIGNED,
+        ] {
+            let (msg, _, plaintext) = Message::unpack_with_plaintext(
+                packed,
+                &did_resolver,
+                &secrets_resolver,
+                &UnpackOptions::default(),
+            )
+            .await
+            .expect("Unable unpack");
+
+            assert_eq!(&msg, &*MESSAGE_SIMPLE);
+            assert_eq!(
+                &Message::from_str(&plaintext).expect("Unable parse plaintext"),
+                &*MESSAGE_SIMPLE
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unpack_with_plaintext_keeps_unwrapped_forward_attachment_as_written() {
+        let did_resolver =
+            ExampleDIDResolver::new(vec![ALICE_DID_DOC.clone(), BOB_DID_DOC.clone()]);
+        let secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+        let written = r#"{ "id": "1", "typ": "application/didcomm-plain+json",
+            "type": "http://example.com/protocols/lets_do_lunch/1.0/proposal",
+            "body": {"a": 1, "\u0061": 2, "n": 333333333.33333329} }"#;
+        for others in [
+            "",
+            r#",{"data":{"base64":"qw"}}"#,
+            r#",{"data":{"links":["https://example.com/a"],"hash":"h"}}"#,
+        ] {
+            let forward = format!(
+                r#"{{"id":"2","typ":"application/didcomm-plain+json","type":"https://didcomm.org/routing/2.0/forward","body":{{"next":"{}"}},"attachments":[{{"data":{{"json":{}}}}}{}]}}"#,
+                BOB_DID, written, others
+            );
+
+            let (packed, _) = crate::message::pack_encrypted::anoncrypt::anoncrypt(
+                BOB_DID,
+                &did_resolver,
+                forward.as_bytes(),
+                &AnonCryptAlg::default(),
+            )
+            .await
+            .expect("Unable anoncrypt");
+
+            let (msg, metadata, plaintext) = Message::unpack_with_plaintext(
+                &packed,
+                &did_resolver,
+                &secrets_resolver,
+                &UnpackOptions::default(),
+            )
+            .await
+            .expect("Unable unpack");
+
+            assert!(metadata.re_wrapped_in_forward);
+            assert_eq!(plaintext, written);
+            assert_eq!(msg.id, "1");
+        }
+    }
+
+    #[tokio::test]
+    async fn unpack_works_largest_finite_number_in_json_attachment() {
+        let did_resolver =
+            ExampleDIDResolver::new(vec![ALICE_DID_DOC.clone(), BOB_DID_DOC.clone()]);
+        let secrets_resolver = ExampleSecretsResolver::new(BOB_SECRETS.clone());
+
+        let written = r#"{"id":"1","typ":"application/didcomm-plain+json",
+            "type":"http://example.com/protocols/lets_do_lunch/1.0/proposal","body":{},
+            "attachments":[{"data":{"json":{"extra":1.797693134862315708e308,"n":333333333.33333329}}}]}"#;
+
+        let (msg, _, plaintext) = Message::unpack_with_plaintext(
+            written,
+            &did_resolver,
+            &secrets_resolver,
+            &UnpackOptions::default(),
+        )
+        .await
+        .expect("Unable unpack");
+
+        assert_eq!(plaintext, written);
+        match &msg.attachments.expect("attachments")[0].data {
+            crate::AttachmentData::Json { value } => {
+                assert_eq!(value.json["extra"].as_f64(), Some(f64::MAX));
+                assert_eq!(value.json["n"].as_f64(), Some(333333333.3333333));
+            }
+            _ => panic!("json attachment expected"),
+        }
     }
 
     #[tokio::test]
