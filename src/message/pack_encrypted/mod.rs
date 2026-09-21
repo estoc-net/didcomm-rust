@@ -1,4 +1,4 @@
-mod anoncrypt;
+pub(super) mod anoncrypt;
 mod authcrypt;
 
 use std::collections::HashMap;
