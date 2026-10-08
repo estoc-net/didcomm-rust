@@ -6,7 +6,7 @@ Basic [DIDComm v2](https://identity.foundation/didcomm-messaging/spec) support f
 
 ## Estoc fork
 
-`@estoc/didcomm` and `@estoc/didcomm-node` are built from [estoc-net/didcomm-rust](https://github.com/estoc-net/didcomm-rust),
+`@estoc/didcomm` and `@estoc/didcomm-node` are built from [estoc-dev/didcomm-rust](https://github.com/estoc-dev/didcomm-rust),
 a fork of [sicpa-dlab/didcomm-rust](https://github.com/sicpa-dlab/didcomm-rust) 0.4.1.
 Versions are `<upstream version>-estoc.<n>`.
 
